@@ -1,0 +1,6 @@
+/target
+Cargo.lock
+/anim
+flamegraph.svg
+perf.data
+perf.data.old
