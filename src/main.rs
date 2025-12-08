@@ -4,7 +4,7 @@ use std::{
     fs::File,
     io::Write,
     path::Path,
-    // time::Instant,
+    time::Instant,
 };
 
 const WIDTH: u32 = 800;
@@ -125,49 +125,49 @@ fn dump_ppm<T: AsRef<Path>>(
 }
 
 // код бенчмарка в видео на ютуб 6:58:54
-fn cycles_to_seconds(cycles: u64) -> f32 {
-    cycles as f32 / 4000000000.0
-}
+// fn cycles_to_seconds(cycles: u64) -> f32 {
+//     cycles as f32 / 4000000000.0
+// }
 
-const COUNT: usize = 10;
+const COUNT: usize = 100;
 fn main() {
     let mut pixels = vec![0u8; (WIDTH * HEIGHT * 3) as usize];
     let mut time = 0.0;
 
-    // let mut total_frame_time_ns = 0;
+    let mut total_frame_time_ns = 0;
 
-    let mut total_frame_time_an = 0;
+    // let mut total_frame_time_an = 0;
 
 
     for _ in 0..COUNT {
-        // let start = Instant::now();
+        let start = Instant::now();
 
-        let start_an = unsafe { std::arch::x86_64::_rdtsc() };
+        // let start_an = unsafe { std::arch::x86_64::_rdtsc() };
 
         shader(&mut pixels, time);
         time += 1.0;
 
-        // let elapsed = start.elapsed();
-        // total_frame_time_ns += elapsed.as_nanos() as u64;
+        let elapsed = start.elapsed();
+        total_frame_time_ns += elapsed.as_nanos() as u64;
 
-        let end_an = unsafe { std::arch::x86_64::_rdtsc() };
-        total_frame_time_an += end_an - start_an;
+        // let end_an = unsafe { std::arch::x86_64::_rdtsc() };
+        // total_frame_time_an += end_an - start_an;
     }
 
-    // let avg = (total_frame_time_ns / COUNT as u64) as f64 / 1.0e+6;
-    // let took = (total_frame_time_ns / COUNT as u64) as f64 / 1.0e+9;
-    // let fps = 1000.0 / avg;
-    // println!("Took {took} s to render {COUNT} frames (Avg: {avg}, FPS: {fps})");
+    let avg = (total_frame_time_ns / COUNT as u64) as f64 / 1.0e+6;
+    let took = (total_frame_time_ns / COUNT as u64) as f64 / 1.0e+9;
+    let fps = 1000.0 / avg;
+    println!("Took {took} s to render {COUNT} frames (Avg: {avg}, FPS: {fps})");
 
-    let frame_time_an =
-        cycles_to_seconds((total_frame_time_an as f64 / COUNT as f64) as u64) * 1000.;
-    println!(
-        "Took {} s to render {} frames (Avg: {}, FPS: {})",
-        cycles_to_seconds(total_frame_time_an),
-        COUNT,
-        frame_time_an,
-        1000.0 / frame_time_an
-    );
+    // let frame_time_an =
+    //     cycles_to_seconds((total_frame_time_an as f64 / COUNT as f64) as u64) * 1000.;
+    // println!(
+    //     "Took {} s to render {} frames (Avg: {}, FPS: {})",
+    //     cycles_to_seconds(total_frame_time_an),
+    //     COUNT,
+    //     frame_time_an,
+    //     1000.0 / frame_time_an
+    // );
 
     shader(&mut pixels, 0.0);
     dump_ppm("output.ppm", &pixels, WIDTH, HEIGHT).unwrap();
