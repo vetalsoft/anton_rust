@@ -10,15 +10,27 @@ use std::{
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
+// fn simd_vec4_tanh(v: f32x4) -> f32x4 {
+//     let two_v = v * 2.0;
+//     let exp_2x = two_v.exp();
+//     let exp_neg_2x = (-two_v).exp();
+//     (exp_2x - exp_neg_2x) / (exp_2x + exp_neg_2x)
+// }
+
+// fn simd_vec4_tanh(v: f32x4) -> f32x4 {
+//     let two_v = v * 2.0;
+//     let e = (-two_v).exp();
+//     (f32x4::splat(1.0) - e) / (f32x4::splat(1.0) + e)
+//     }
+
 fn simd_vec4_tanh(v: f32x4) -> f32x4 {
-    let two_v = v * 2.0;
-    let exp_2x = two_v.exp();
-    let exp_neg_2x = (-two_v).exp();
-    (exp_2x - exp_neg_2x) / (exp_2x + exp_neg_2x)
+    let two_x = v * f32x4::splat(2.0);
+    let e2x = two_x.exp(); // e^(2x)
+    (e2x - f32x4::splat(1.0)) / (e2x + f32x4::splat(1.0))
 }
 
 fn simd_clamp_th(v: f32x4, min_val: f32x4, max_val: f32x4) -> f32x4 {
-    v.max(simd_vec4_tanh(min_val)).min(max_val)
+    simd_vec4_tanh(v).max(min_val).min(max_val)
 }
 
 // Функция для вычисления 4 пикселей SIMD
