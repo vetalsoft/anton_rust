@@ -10,15 +10,59 @@ use std::{
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
-fn simd_vec4_tanh(v: f32x4) -> f32x4 {
-    let two_x = v * f32x4::splat(2.0);
-    let e2x = two_x.exp(); // e^(2x)
-    (e2x - f32x4::splat(1.0)) / (e2x + f32x4::splat(1.0))
+const TANH_TABLE_SIZE: usize = 1200;
+const TANH_MIN_INPUT: f32 = 0.0;
+const TANH_MAX_INPUT: f32 = 5.0;
+
+static TANH_TABLE: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLock::new(|| build_tanh_table());
+
+fn build_tanh_table() -> Vec<u8> {
+    let mut table = Vec::with_capacity(TANH_TABLE_SIZE);
+    let scale = (TANH_TABLE_SIZE - 1) as f32 / (TANH_MAX_INPUT - TANH_MIN_INPUT);
+    for i in 0..TANH_TABLE_SIZE {
+        let x = TANH_MIN_INPUT + (i as f32) / scale;
+        let tanh_x = x.tanh(); // стандартный tanh из f32
+        let clamped = tanh_x.max(0.0).min(1.0); // clamp(0, 1)
+        let result = (clamped * 255.0).round() as u8; // * 255 и округление
+        table.push(result);
+    }
+    table
 }
 
-fn simd_clamp_th(v: f32x4, min_val: f32x4, max_val: f32x4) -> f32x4 {
-    simd_vec4_tanh(v).max(min_val).min(max_val)
+fn lookup_tanh_clamped(x: f32, table: &[u8]) -> u8 {
+    // Приводим x к индексу
+    let scaled = (x - TANH_MIN_INPUT) * (TANH_TABLE_SIZE - 1) as f32 / (TANH_MAX_INPUT - TANH_MIN_INPUT);
+    let scaled = scaled.max(0.0).min((TANH_TABLE_SIZE - 1) as f32);
+
+    let idx_f = scaled;
+    let idx0 = idx_f.floor() as usize;
+    let idx1 = (idx0 + 1).min(TANH_TABLE_SIZE - 1);
+    let fract = idx_f - idx_f.floor();
+
+    let val0 = table[idx0] as f32;
+    let val1 = table[idx1] as f32;
+
+    ((val0 * (1.0 - fract) + val1 * fract).round()) as u8
 }
+
+fn lookup_tanh_clamped_f32x4(v: f32x4, table: &[u8]) -> [u8; 4] {
+    let arr = v.to_array();
+    [   lookup_tanh_clamped(arr[0], table),
+        lookup_tanh_clamped(arr[1], table),
+        lookup_tanh_clamped(arr[2], table),
+        lookup_tanh_clamped(arr[3], table),
+    ]
+}
+
+// fn simd_vec4_tanh(v: f32x4) -> f32x4 {
+//     let two_x = v * f32x4::splat(2.0);
+//     let e2x = two_x.exp(); // e^(2x)
+//     (e2x - f32x4::splat(1.0)) / (e2x + f32x4::splat(1.0))
+// }
+
+// fn simd_clamp_th(v: f32x4, min_val: f32x4, max_val: f32x4) -> f32x4 {
+//     simd_vec4_tanh(v).max(min_val).min(max_val)
+// }
 
 // Функция для вычисления 4 пикселей SIMD
 fn calculate_4_pixels_color_simd(x_start: u32, y: u32, t: f32, buffer: &mut [u8]) {
@@ -78,19 +122,15 @@ fn calculate_4_pixels_color_simd(x_start: u32, y: u32, t: f32, buffer: &mut [u8]
     let g = ((-p_y).exp() * exp_l) / o_y;
     let b = ((-p_y * 2.0).exp() * exp_l) / o_z;
 
-    let clamped_r = simd_clamp_th(r, f32x4::ZERO, f32x4::splat(1.0)) * f32x4::splat(255.0);
-    let clamped_g = simd_clamp_th(g, f32x4::ZERO, f32x4::splat(1.0)) * f32x4::splat(255.0);
-    let clamped_b = simd_clamp_th(b, f32x4::ZERO, f32x4::splat(1.0)) * f32x4::splat(255.0);
-
-    let r_arr = clamped_r.to_array();
-    let g_arr = clamped_g.to_array();
-    let b_arr = clamped_b.to_array();
+    let r_arr = lookup_tanh_clamped_f32x4(r, &TANH_TABLE);
+    let g_arr = lookup_tanh_clamped_f32x4(g, &TANH_TABLE);
+    let b_arr = lookup_tanh_clamped_f32x4(b, &TANH_TABLE);
 
     for i in 0..4 {
         let offset = (x_start as usize + i) * 3; // 3 байта на пиксель
-        buffer[offset + 0] = r_arr[i].min(255.0).max(0.0) as u8; // R
-        buffer[offset + 1] = g_arr[i].min(255.0).max(0.0) as u8; // G
-        buffer[offset + 2] = b_arr[i].min(255.0).max(0.0) as u8; // B
+        buffer[offset + 0] = r_arr[i]; // R
+        buffer[offset + 1] = g_arr[i]; // G
+        buffer[offset + 2] = b_arr[i]; // B
     }
 }
 
