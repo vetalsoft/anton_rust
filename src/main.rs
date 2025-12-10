@@ -1,4 +1,4 @@
-use wide::f32x4;
+use wide::f32x8;
 use rayon::prelude::*;
 use std::{
     fs::File,
@@ -7,130 +7,74 @@ use std::{
     time::Instant,
 };
 
+mod glsl_types;
+use glsl_types::*;
+
 const WIDTH: u32 = 800;
 const HEIGHT: u32 = 600;
 
-const TANH_TABLE_SIZE: usize = 1200;
-const TANH_MIN_INPUT: f32 = 0.0;
-const TANH_MAX_INPUT: f32 = 5.0;
+// Функция для вычисления 8 пикселей SIMD
+fn calculate_8_pixels_color_simd(x_start: u32, y: u32, time: f32, buffer: &mut [u8]) {
+    let x_coords = f32x8::splat(x_start as f32)
+        + f32x8::from([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
 
-static TANH_TABLE: std::sync::LazyLock<Vec<u8>> = std::sync::LazyLock::new(|| build_tanh_table());
+    let y_coords: f32x8 = f32x8::splat((HEIGHT - y) as f32);
+    let r_x = f32x8::splat(WIDTH as f32);
+    let r_y = f32x8::splat(HEIGHT as f32);
 
-fn build_tanh_table() -> Vec<u8> {
-    let mut table = Vec::with_capacity(TANH_TABLE_SIZE);
-    let scale = (TANH_TABLE_SIZE - 1) as f32 / (TANH_MAX_INPUT - TANH_MIN_INPUT);
-    for i in 0..TANH_TABLE_SIZE {
-        let x = TANH_MIN_INPUT + (i as f32) / scale;
-        let tanh_x = x.tanh(); // стандартный tanh из f32
-        let clamped = tanh_x.max(0.0).min(1.0); // clamp(0, 1)
-        let result = (clamped * 255.0).round() as u8; // * 255 и округление
-        table.push(result);
+    // GLSL: vec2 p = (I+I-r) / r.y;
+    let in_vec2_i: Vec2 = Vec2::new(x_coords, y_coords);
+    let resolution: Vec2 = Vec2::new(r_x, r_y);
+    let position: Vec2 = (in_vec2_i + in_vec2_i - resolution) / resolution.y;
+
+    // GLSL: z = 4. - 4.*abs(.7-dot(p,p))
+    let z_scalar: f32x8 = (f32x8::splat(0.7) - position.dot(position)).abs() * f32x8::splat(-4.0) + f32x8::splat(4.0);
+
+    // GLSL: f = p*(z+=...) -> f = p * z.x
+    let mut fluid_coordinstes: Vec2 = position * z_scalar;
+
+    // GLSL: O *= 0. -> O = vec4(0.)
+    let mut out_vec4_o: Vec4 = Vec4::ZERO;
+
+    // GLSL: for(...; i.y++<8.; ...)
+    for step in 1..=8 {
+        let i_y: f32x8 = f32x8::splat(step as f32);
+
+        // GLSL: O += (sin(f)+1.).xyyx * abs(f.x-f.y)
+        out_vec4_o = out_vec4_o
+            + (fluid_coordinstes.sin() + Vec2::splat(1.0)).xyyx()
+            * (fluid_coordinstes.x - fluid_coordinstes.y).abs();
+
+        // GLSL: f += cos(f.yx*i.y+i+iTime)/i.y+.7;
+        fluid_coordinstes = fluid_coordinstes
+            +   ((   fluid_coordinstes.yx() * i_y
+                    + Vec2::new(f32x8::ZERO, i_y)
+                    + Vec2::new(f32x8::splat(time), f32x8::splat(time))
+                ).cos()
+            / i_y) + Vec2::splat(0.7);
     }
-    table
-}
 
-fn lookup_tanh_clamped(x: f32, table: &[u8]) -> u8 {
-    // Приводим x к индексу
-    let scaled = (x - TANH_MIN_INPUT) * (TANH_TABLE_SIZE - 1) as f32 / (TANH_MAX_INPUT - TANH_MIN_INPUT);
-    let scaled = scaled.max(0.0).min((TANH_TABLE_SIZE - 1) as f32);
-
-    let idx_f = scaled;
-    let idx0 = idx_f.floor() as usize;
-    let idx1 = (idx0 + 1).min(TANH_TABLE_SIZE - 1);
-    let fract = idx_f - idx_f.floor();
-
-    let val0 = table[idx0] as f32;
-    let val1 = table[idx1] as f32;
-
-    ((val0 * (1.0 - fract) + val1 * fract).round()) as u8
-}
-
-fn lookup_tanh_clamped_f32x4(v: f32x4, table: &[u8]) -> [u8; 4] {
-    let arr = v.to_array();
-    [   lookup_tanh_clamped(arr[0], table),
-        lookup_tanh_clamped(arr[1], table),
-        lookup_tanh_clamped(arr[2], table),
-        lookup_tanh_clamped(arr[3], table),
-    ]
-}
-
-// fn simd_vec4_tanh(v: f32x4) -> f32x4 {
-//     let two_x = v * f32x4::splat(2.0);
-//     let e2x = two_x.exp(); // e^(2x)
-//     (e2x - f32x4::splat(1.0)) / (e2x + f32x4::splat(1.0))
-// }
-
-// fn simd_clamp_th(v: f32x4, min_val: f32x4, max_val: f32x4) -> f32x4 {
-//     simd_vec4_tanh(v).max(min_val).min(max_val)
-// }
-
-// Функция для вычисления 4 пикселей SIMD
-fn calculate_4_pixels_color_simd(x_start: u32, y: u32, t: f32, buffer: &mut [u8]) {
-    let x_coords = f32x4::from(
-        [x_start as f32,
-        (x_start + 1) as f32,
-        (x_start + 2) as f32,
-        (x_start + 3) as f32]
+    // GLSL: O = tanh(7.*exp(z.x-4.-p.y*vec4(-1,1,2,0))/O);
+    let color_gradient = Vec4::new( // p.y*vec4(-1,1,2,0
+        -position.y,
+         position.y,
+         position.y * f32x8::splat(2.0),
+         f32x8::ZERO,
     );
 
-    let y_coord_scalar = (HEIGHT - y) as f32;
-    let y_coords = f32x4::splat(y_coord_scalar);
-    let r_x_scalar = WIDTH as f32;
-    let r_y_scalar = HEIGHT as f32;
-    let r_x = f32x4::splat(r_x_scalar);
-    let r_y = f32x4::splat(r_y_scalar);
+    out_vec4_o =
+        (
+            ((Vec4::splat(z_scalar - f32x8::splat(4.0)) - color_gradient)
+                .exp() * f32x8::splat(7.0)) / out_vec4_o
+        ).tanh();
 
-    let fc_x = x_coords;
-    let fc_y = y_coords;
-    let p_x = (fc_x * 2.0 - r_x) / r_y;
-    let p_y = (fc_y * 2.0 - r_y) / r_y;
+    let pixels = vec4_to_rgb_arrow(out_vec4_o);
 
-    let p_dot_p = p_x * p_x + p_y * p_y;
-    let l_val = (f32x4::splat(0.7) - p_dot_p).abs();
-    let scale = (f32x4::splat(1.0) - l_val) * f32x4::splat(5.0);
-    let mut v_x = p_x * scale;
-    let mut v_y = p_y * scale;
-
-    let mut o_x = f32x4::ZERO;
-    let mut o_y = f32x4::ZERO;
-    let mut o_z = f32x4::ZERO;
-    let mut o_w = f32x4::ZERO;
-
-    for step in 1..=8 {
-        let i_y_scalar = step as f32;
-        let i_y_vec = f32x4::splat(i_y_scalar);
-
-        let abs_diff = (v_x - v_y).abs() * 0.2;
-        let sin_v_x = (v_x).sin();
-        let sin_v_y = (v_y).sin();
-
-        o_x = o_x + (sin_v_x + f32x4::splat(1.0)) * abs_diff;
-        o_y = o_y + (sin_v_y + f32x4::splat(1.0)) * abs_diff;
-        o_z = o_z + (sin_v_y + f32x4::splat(1.0)) * abs_diff;
-        o_w = o_w + (sin_v_x + f32x4::splat(1.0)) * abs_diff; 
-
-        let cos_x = (v_y * i_y_vec + f32x4::splat(t)).cos();
-        let cos_y = (v_x * i_y_vec + i_y_vec + f32x4::splat(t)).cos();
-
-        v_x = v_x + cos_x / i_y_vec + f32x4::splat(0.7);
-        v_y = v_y + cos_y / i_y_vec + f32x4::splat(0.7);
-    }
-
-    let exp_l = (-f32x4::splat(4.0) * l_val).exp();
-
-    let r = (p_y.exp() * exp_l) / o_x;
-    let g = ((-p_y).exp() * exp_l) / o_y;
-    let b = ((-p_y * 2.0).exp() * exp_l) / o_z;
-
-    let r_arr = lookup_tanh_clamped_f32x4(r, &TANH_TABLE);
-    let g_arr = lookup_tanh_clamped_f32x4(g, &TANH_TABLE);
-    let b_arr = lookup_tanh_clamped_f32x4(b, &TANH_TABLE);
-
-    for i in 0..4 {
+    for i in 0..8 {
         let offset = (x_start as usize + i) * 3; // 3 байта на пиксель
-        buffer[offset + 0] = r_arr[i]; // R
-        buffer[offset + 1] = g_arr[i]; // G
-        buffer[offset + 2] = b_arr[i]; // B
+        buffer[offset + 0] = pixels.r[i]; // R
+        buffer[offset + 1] = pixels.g[i]; // G
+        buffer[offset + 2] = pixels.b[i]; // B
     }
 }
 
@@ -144,9 +88,9 @@ fn shader(pixels: &mut [u8], t: f32) {
             let y = row_idx as u32;
 
             let mut x = 0;
-            while x + 4 <= row_slice.len() / 3 {
-                calculate_4_pixels_color_simd(x as u32, y, t, row_slice);
-                x += 4;
+            while x + 8 <= row_slice.len() / 3 {
+                calculate_8_pixels_color_simd(x as u32, y, t, row_slice);
+                x += 8;
             }
         });
 }
@@ -176,7 +120,6 @@ fn main() {
     let mut total_frame_time_ns = 0;
 
     // let mut total_frame_time_an = 0;
-
 
     for _ in 0..COUNT {
         let start = Instant::now();

@@ -4,3 +4,5 @@ Cargo.lock
 flamegraph.svg
 perf.data
 perf.data.old
+Shader.frag
+.vscode/settings.json
