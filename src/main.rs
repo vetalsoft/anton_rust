@@ -42,16 +42,16 @@ fn calculate_8_pixels_color_simd(x_start: u32, y: u32, time: f32, buffer: &mut [
 
         // GLSL: O += (sin(f)+1.).xyyx * abs(f.x-f.y)
         out_vec4_o = out_vec4_o
-            + (fluid_coordinstes.sin() + Vec2::splat(1.0)).xyyx()
+            + (fluid_coordinstes.sin() + Vec2::splat_float(1.0)).xyyx()
             * (fluid_coordinstes.x - fluid_coordinstes.y).abs();
 
         // GLSL: f += cos(f.yx*i.y+i+iTime)/i.y+.7;
         fluid_coordinstes = fluid_coordinstes
             +   ((   fluid_coordinstes.yx() * i_y
                     + Vec2::new(f32x8::ZERO, i_y)
-                    + Vec2::new(f32x8::splat(time), f32x8::splat(time))
+                    + Vec2::splat_float(time)
                 ).cos()
-            / i_y) + Vec2::splat(0.7);
+            / i_y) + Vec2::splat_float(0.7);
     }
 
     // GLSL: O = tanh(7.*exp(z.x-4.-p.y*vec4(-1,1,2,0))/O);
@@ -64,7 +64,7 @@ fn calculate_8_pixels_color_simd(x_start: u32, y: u32, time: f32, buffer: &mut [
 
     out_vec4_o =
         (
-            ((Vec4::splat(z_scalar - f32x8::splat(4.0)) - color_gradient)
+            ((Vec4::splat_f32x8(z_scalar - f32x8::splat(4.0)) - color_gradient)
                 .exp() * f32x8::splat(7.0)) / out_vec4_o
         ).tanh();
 

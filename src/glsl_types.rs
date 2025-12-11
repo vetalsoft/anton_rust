@@ -21,10 +21,11 @@ impl Vec2 {
         Vec2 { x: self.x.sin(), y: self.y.sin() }
     }
 
-    pub fn splat(float: f32) -> Self {
+    pub fn splat_float(float: f32) -> Self {
+        let sp = f32x8::splat(float);
         Vec2 {
-            x: f32x8::splat(float),
-            y: f32x8::splat(float),
+            x: sp,
+            y: sp,
         }
     }
 
@@ -85,7 +86,7 @@ impl Vec4 {
         Vec4 { x, y, z, w }
     }
 
-    pub fn splat(scalar: f32x8) -> Vec4 {
+    pub fn splat_f32x8(scalar: f32x8) -> Vec4 {
         Vec4 { x: scalar, y: scalar, z: scalar, w: scalar }
     }
 
@@ -176,7 +177,7 @@ impl Color {
 
 pub fn vec4_to_rgb_arrow(vec: Vec4) -> Color {
     let convet = |x: f32x8|
-        (x.max(f32x8::ZERO).min(f32x8::ONE) * 255.0)
+        ((x * 255.0).max(f32x8::ZERO).min(f32x8::splat(255.0)))
         .round().to_array().map(|e| e as u8);
     Color {
         r: convet(vec.x),
