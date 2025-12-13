@@ -1,11 +1,6 @@
-use wide::f32x8;
 use rayon::prelude::*;
-use std::{
-    fs::File,
-    io::Write,
-    path::Path,
-    time::Instant,
-};
+use std::{fs::File, io::Write, path::Path, time::Instant};
+use wide::f32x8;
 
 mod glsl_types;
 use glsl_types::*;
@@ -15,8 +10,8 @@ const HEIGHT: u32 = 600;
 
 // Функция для вычисления 8 пикселей SIMD
 fn calculate_8_pixels_color_simd(x_start: u32, y: u32, time: f32, buffer: &mut [u8]) {
-    let x_coords = f32x8::splat(x_start as f32)
-        + f32x8::from([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
+    let x_coords =
+        f32x8::splat(x_start as f32) + f32x8::from([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
 
     let y_coords: f32x8 = f32x8::splat((HEIGHT - y) as f32);
     let r_x = f32x8::splat(WIDTH as f32);
@@ -28,7 +23,8 @@ fn calculate_8_pixels_color_simd(x_start: u32, y: u32, time: f32, buffer: &mut [
     let position: Vec2 = (in_vec2_i + in_vec2_i - resolution) / resolution.y;
 
     // GLSL: z = 4. - 4.*abs(.7-dot(p,p))
-    let z_scalar: f32x8 = (f32x8::splat(0.7) - position.dot(position)).abs() * f32x8::splat(-4.0) + f32x8::splat(4.0);
+    let z_scalar: f32x8 =
+        (f32x8::splat(0.7) - position.dot(position)).abs() * f32x8::splat(-4.0) + f32x8::splat(4.0);
 
     // GLSL: f = p*(z+=...) -> f = p * z.x
     let mut fluid_coordinstes: Vec2 = position * z_scalar;
@@ -43,30 +39,31 @@ fn calculate_8_pixels_color_simd(x_start: u32, y: u32, time: f32, buffer: &mut [
         // GLSL: O += (sin(f)+1.).xyyx * abs(f.x-f.y)
         out_vec4_o = out_vec4_o
             + (fluid_coordinstes.sin() + Vec2::splat_float(1.0)).xyyx()
-            * (fluid_coordinstes.x - fluid_coordinstes.y).abs();
+                * (fluid_coordinstes.x - fluid_coordinstes.y).abs();
 
         // GLSL: f += cos(f.yx*i.y+i+iTime)/i.y+.7;
         fluid_coordinstes = fluid_coordinstes
-            +   ((   fluid_coordinstes.yx() * i_y
-                    + Vec2::new(f32x8::ZERO, i_y)
-                    + Vec2::splat_float(time)
-                ).cos()
-            / i_y) + Vec2::splat_float(0.7);
+            + ((fluid_coordinstes.yx() * i_y
+                + Vec2::new(f32x8::ZERO, i_y)
+                + Vec2::splat_float(time))
+            .cos()
+                / i_y)
+            + Vec2::splat_float(0.7);
     }
 
     // GLSL: O = tanh(7.*exp(z.x-4.-p.y*vec4(-1,1,2,0))/O);
-    let color_gradient = Vec4::new( // p.y*vec4(-1,1,2,0
+    let color_gradient = Vec4::new(
+        // p.y*vec4(-1,1,2,0
         -position.y,
-         position.y,
-         position.y * f32x8::splat(2.0),
-         f32x8::ZERO,
+        position.y,
+        position.y * f32x8::splat(2.0),
+        f32x8::ZERO,
     );
 
-    out_vec4_o =
-        (
-            ((Vec4::splat_f32x8(z_scalar - f32x8::splat(4.0)) - color_gradient)
-                .exp() * f32x8::splat(7.0)) / out_vec4_o
-        ).tanh();
+    out_vec4_o = (((Vec4::splat_f32x8(z_scalar - f32x8::splat(4.0)) - color_gradient).exp()
+        * f32x8::splat(7.0))
+        / out_vec4_o)
+        .tanh();
 
     let pixels = vec4_to_rgb_arrow(out_vec4_o);
 
